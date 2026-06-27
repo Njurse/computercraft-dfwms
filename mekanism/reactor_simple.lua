@@ -4,22 +4,23 @@
 
 -- Configuration
 local TEMP_THRESHOLD = 1200          -- Kelvin
+local REACTOR_SIDE = "back"          -- Side the Logic Adapter is directly touching
 local MODEM_SIDE = "right"           -- Side for the WIRELESS modem (for rednet broadcasts)
 local REDNET_PROTOCOL = "reactor_monitor"  -- Protocol string for rednet filtering
 local CHECK_INTERVAL = 1             -- Seconds between checks
 local STATUS_INTERVAL = 10           -- Seconds between status broadcasts
 
--- Find the reactor logic adapter on the wired network.
--- peripheral.find() searches all connected wired peripherals by type,
--- so the logic adapter just needs to be cabled in -- no side config needed.
-local reactor = peripheral.find("fissionReactorLogicAdapter")
+-- Wrap the reactor logic adapter directly by side.
+-- The Logic Adapter must be physically adjacent to this computer (no wired modem needed).
+local reactor = peripheral.wrap(REACTOR_SIDE)
 if not reactor then
-    print("ERROR: No fissionReactorLogicAdapter found on the wired network.")
-    print("Check that:")
-    print("  - The Logic Adapter is placed on the reactor wall")
-    print("  - A Wired Modem is attached to it and right-clicked to enable")
-    print("  - Networking Cable connects it to this computer's wired modem")
-    print("  - This computer's wired modem is also right-clicked to enable")
+    print("ERROR: No peripheral found on side '" .. REACTOR_SIDE .. "'.")
+    print("Make sure the Fission Reactor Logic Adapter is touching this side of the computer.")
+    return
+end
+if not reactor.getTemperature then
+    print("ERROR: Peripheral on '" .. REACTOR_SIDE .. "' is not a Fission Reactor Logic Adapter.")
+    print("peripheral type: " .. tostring(peripheral.getType(REACTOR_SIDE)))
     return
 end
 
