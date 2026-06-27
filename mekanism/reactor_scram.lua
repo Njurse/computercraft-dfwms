@@ -60,24 +60,44 @@ local function printStatus(line)
     print(string.format("[%s] %s", ts, line))
 end
 
--- Collect all reactor stats into a flat table in one place.
--- Every broadcast includes this so the pocket app always has fresh data.
+-- Collect all reactor stats with explicit direct calls.
+-- Each method is called normally (no dynamic dispatch, no self argument)
+-- so CC:Tweaked peripheral wrappers work correctly.
 local function collectStats()
     local s = {}
-    local methods = {
-        "getTemperature", "getStatus", "getBurnRate", "getActualBurnRate",
-        "getMaxBurnRate", "getFuelFilledPercentage", "getWasteFilledPercentage",
-        "getCoolantFilledPercentage", "getHeatedCoolantFilledPercentage",
-        "getDamagePercent",
-    }
-    for _, name in ipairs(methods) do
-        if reactor[name] then
-            local ok, val = pcall(reactor[name], reactor)
-            if ok and val ~= nil then
-                s[name] = val
-            end
-        end
-    end
+
+    local ok, v
+
+    ok, v = pcall(reactor.getTemperature)
+    if ok then s.getTemperature = v end
+
+    ok, v = pcall(reactor.getStatus)
+    if ok then s.getStatus = v end
+
+    ok, v = pcall(reactor.getBurnRate)
+    if ok then s.getBurnRate = v end
+
+    ok, v = pcall(reactor.getActualBurnRate)
+    if ok then s.getActualBurnRate = v end
+
+    ok, v = pcall(reactor.getMaxBurnRate)
+    if ok then s.getMaxBurnRate = v end
+
+    ok, v = pcall(reactor.getFuelFilledPercentage)
+    if ok then s.getFuelFilledPercentage = v end
+
+    ok, v = pcall(reactor.getWasteFilledPercentage)
+    if ok then s.getWasteFilledPercentage = v end
+
+    ok, v = pcall(reactor.getCoolantFilledPercentage)
+    if ok then s.getCoolantFilledPercentage = v end
+
+    ok, v = pcall(reactor.getHeatedCoolantFilledPercentage)
+    if ok then s.getHeatedCoolantFilledPercentage = v end
+
+    ok, v = pcall(reactor.getDamagePercent)
+    if ok then s.getDamagePercent = v end
+
     return s
 end
 
@@ -259,7 +279,7 @@ local function commandLoop()
                     alarm_active = false
                     pcall(reactor.activate)
                     printStatus("Reactor activated by remote #" .. id)
-                    local s = collectStats and pcall(collectStats) and {} or {}
+                    local s = collectStats()
                     send("STATUS", "Remote activate by #" .. id, s)
                 end
 
