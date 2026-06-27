@@ -8,8 +8,8 @@ local MODEM_SIDE      = "right"
 local REDNET_PROTOCOL = "reactor_monitor"
 local CMD_PROTOCOL    = "reactor_cmd"
 
-local CRITICAL_TEMP   = 1000   -- K  — above this triggers SCRAM
-local RESUME_TEMP     = 350    -- K  — below this allows clearing a temp-SCRAM
+local CRITICAL_TEMP   = 1000   -- K  → above this triggers SCRAM
+local RESUME_TEMP     = 350    -- K  → below this allows clearing a temp-SCRAM
 local SCAN_INTERVAL   = 2.0    -- seconds between polls
 local FAILSAFE_TRIPS  = 2      -- consecutive temp-SCRAMs before operator lockout
 
@@ -20,7 +20,7 @@ local ALARM_VOLUME    = 3.0
 -- scram:       reactor must be kept off due to over-temperature
 -- manual_hold: reactor was scrammed manually (button/redstone/remote) and must
 --              NOT auto-restart until an explicit "activate" command is received
--- failsafe:    two consecutive temp-trips — operator must reset locally or remotely
+-- failsafe:    two consecutive temp-trips → operator must reset locally or remotely
 local scram        = false
 local manual_hold  = false
 local failsafe     = false
@@ -106,7 +106,7 @@ local function send(msgType, body, stats)
         rednet.broadcast({
             type  = msgType,
             body  = body,
-            stats = stats or {},   -- always present — pocket app reads from here
+            stats = stats or {},   -- always present → pocket app reads from here
             time  = os.time(),
         }, REDNET_PROTOCOL)
     end
@@ -165,7 +165,6 @@ local function reactorLoop()
         if not ok or not stats then
             printStatus("ERROR: stat collection failed — " .. tostring(stats))
             send("ERROR", "Stat collection failed", {})
-            alarm_active = true
             os.sleep(SCAN_INTERVAL)
         else
             temperature = stats.getTemperature or 0
@@ -177,7 +176,6 @@ local function reactorLoop()
             local reactorOn = stats.getStatus
             if reactorOn == false and not scram and not manual_hold and not failsafe then
                 manual_hold = true
-                alarm_active = true
                 printStatus("External SCRAM detected — manual reactivation required.")
                 send("MANUAL_SCRAM", "External SCRAM detected", stats)
             end
@@ -191,7 +189,6 @@ local function reactorLoop()
                     ))
                 end
                 scram = true
-                alarm_active = true
                 if fail_count >= FAILSAFE_TRIPS then
                     failsafe = true
                 end
@@ -207,6 +204,7 @@ local function reactorLoop()
 
             -- ── Act on state ───────────────────────────────────────────────────
             if failsafe then
+                -- Failsafe: alarm sounds, reactor held off, operator must reset
                 alarm_active = true
                 pcall(reactor.scram)
                 printStatus(string.format(
@@ -228,7 +226,8 @@ local function reactorLoop()
                 end
 
             elseif scram then
-                alarm_active = true
+                -- Over-temperature SCRAM: silent, reactor held off
+                alarm_active = false
                 pcall(reactor.scram)
                 printStatus(string.format(
                     "SCRAM | Temp: %.1fK | Trips: %d", temperature, fail_count
@@ -238,8 +237,8 @@ local function reactorLoop()
 
             elseif manual_hold then
                 -- Reactor was stopped externally or after a temp-SCRAM cleared.
-                -- Hold it off and wait for an explicit activate command.
-                alarm_active = true
+                -- Hold it off silently and wait for an explicit activate command.
+                alarm_active = false
                 pcall(reactor.scram)
                 printStatus(string.format(
                     "HOLD | Temp: %.1fK | Awaiting manual activate", temperature
@@ -285,7 +284,6 @@ local function commandLoop()
 
             elseif cmd == "scram" then
                 manual_hold  = true
-                alarm_active = true
                 pcall(reactor.scram)
                 printStatus("Remote SCRAM from #" .. id)
                 send("MANUAL_SCRAM", "Remote SCRAM by #" .. id, {})
