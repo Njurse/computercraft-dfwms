@@ -93,16 +93,18 @@ local function pctColour(pct, invertDanger)
 end
 
 local function statusColour(d)
-    if d.failsafe then return colors.magenta end
-    if d.scram    then return colors.red     end
-    if d.active   then return colors.green   end
+    if d.failsafe    then return colors.magenta  end
+    if d.scram       then return colors.red      end
+    if d.manual_hold then return colors.orange   end
+    if d.active      then return colors.green    end
     return colors.yellow
 end
 
 local function statusText(d)
-    if d.failsafe then return "!! FAILSAFE !!" end
-    if d.scram    then return "  SCRAMMED   " end
-    if d.active   then return "   ONLINE    " end
+    if d.failsafe    then return "!! FAILSAFE !!" end
+    if d.scram       then return "  SCRAMMED   "  end
+    if d.manual_hold then return "  HELD/SAFE  "  end
+    if d.active      then return "   ONLINE    "  end
     return "   OFFLINE   "
 end
 
@@ -274,7 +276,8 @@ end
 local data = {
     temperature = 0, coolant = 0, hcoolant = 0,
     fuel = 0, waste = 0, burn = 0, maxburn = 0,
-    damage = 0, active = false, scram = false, failsafe = false,
+    damage = 0, active = false, scram = false,
+    manual_hold = false, failsafe = false,
 }
 local connected  = false
 local lastUpdate = 0
@@ -284,20 +287,26 @@ local function receiveLoop()
     while true do
         local id, msg, proto = rednet.receive(REDNET_PROTOCOL, POLL_TIMEOUT)
         if id and type(msg) == "table" then
-            -- STATUS packets carry a `stats` subtable
+            -- Every broadcast now includes a `stats` table with flat method-name keys.
+            -- Update whichever fields are present; keep last known value for the rest.
             local s = msg.stats or {}
-            data.temperature = s.getTemperature              or data.temperature
-            data.coolant      = s.getCoolantFilledPercentage or data.coolant
-            data.hcoolant     = s.getHeatedCoolantFilledPercentage or data.hcoolant
-            data.fuel         = s.getFuelFilledPercentage    or data.fuel
-            data.waste        = s.getWasteFilledPercentage   or data.waste
-            data.burn         = s.getBurnRate                or data.burn
-            data.maxburn      = s.getMaxBurnRate             or data.maxburn
-            data.damage       = s.getDamagePercent           or data.damage
-            -- Derive reactor state from message type
-            data.active   = (msg.type == "STATUS")
-            data.scram    = (msg.type == "SCRAM" or msg.type == "SCRAM_ALERT" or msg.type == "SCRAM_SUCCESS")
-            data.failsafe = (msg.type == "FAILSAFE")
+            if s.getTemperature                    ~= nil then data.temperature = s.getTemperature                    end
+            if s.getCoolantFilledPercentage        ~= nil then data.coolant     = s.getCoolantFilledPercentage        end
+            if s.getHeatedCoolantFilledPercentage  ~= nil then data.hcoolant   = s.getHeatedCoolantFilledPercentage  end
+            if s.getFuelFilledPercentage           ~= nil then data.fuel        = s.getFuelFilledPercentage           end
+            if s.getWasteFilledPercentage          ~= nil then data.waste       = s.getWasteFilledPercentage          end
+            if s.getBurnRate                       ~= nil then data.burn        = s.getBurnRate                       end
+            if s.getMaxBurnRate                    ~= nil then data.maxburn     = s.getMaxBurnRate                    end
+            if s.getDamagePercent                  ~= nil then data.damage      = s.getDamagePercent                  end
+
+            -- Derive display state from message type.
+            -- MANUAL_HOLD / MANUAL_SCRAM = reactor is intentionally held off.
+            local t = msg.type
+            data.active      = (t == "STATUS")
+            data.scram       = (t == "SCRAM" or t == "SCRAM_ALERT")
+            data.manual_hold = (t == "MANUAL_HOLD" or t == "MANUAL_SCRAM" or t == "SCRAM_CLEARED" or t == "FAILSAFE_RESET")
+            data.failsafe    = (t == "FAILSAFE")
+
             connected  = true
             lastUpdate = os.clock()
             drawAll(data, connected)

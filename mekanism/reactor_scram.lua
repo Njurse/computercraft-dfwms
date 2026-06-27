@@ -2,25 +2,30 @@
 -- Mekanism fission reactor SCRAM monitor for CC:Tweaked (Valhelsia 6 / 1.20.1)
 -- Logic Adapter on back, wireless modem on right.
 
--- ── Configuration ────────────────────────────────────────────────────────────
+-- ── Configuration ─────────────────────────────────────────────────────────────
 local REACTOR_SIDE    = "back"
 local MODEM_SIDE      = "right"
 local REDNET_PROTOCOL = "reactor_monitor"
-local CMD_PROTOCOL    = "reactor_cmd"     -- pocket companion sends commands here
+local CMD_PROTOCOL    = "reactor_cmd"
 
 local CRITICAL_TEMP   = 1000   -- K  — above this triggers SCRAM
-local RESUME_TEMP     = 350    -- K  — below this clears SCRAM (35% of 1000)
+local RESUME_TEMP     = 350    -- K  — below this allows clearing a temp-SCRAM
 local SCAN_INTERVAL   = 2.0    -- seconds between polls
-local FAILSAFE_TRIPS  = 2      -- consecutive SCRAMs before operator lockout
+local FAILSAFE_TRIPS  = 2      -- consecutive temp-SCRAMs before operator lockout
 
 local ALARM_FILE      = "scram_alarm.dfpwm"
-local ALARM_VOLUME    = 3.0    -- max range
+local ALARM_VOLUME    = 3.0
 
 -- ── State ─────────────────────────────────────────────────────────────────────
-local scram        = false   -- true while temperature is over threshold
-local failsafe     = false   -- true after FAILSAFE_TRIPS consecutive trips
-local fail_count   = 0       -- consecutive SCRAM trips
-local alarm_active = false   -- shared flag read by the alarm coroutine
+-- scram:       reactor must be kept off due to over-temperature
+-- manual_hold: reactor was scrammed manually (button/redstone/remote) and must
+--              NOT auto-restart until an explicit "activate" command is received
+-- failsafe:    two consecutive temp-trips — operator must reset locally or remotely
+local scram        = false
+local manual_hold  = false
+local failsafe     = false
+local fail_count   = 0
+local alarm_active = false
 local temperature  = 0.0
 
 -- ── Peripherals ───────────────────────────────────────────────────────────────
@@ -50,65 +55,76 @@ else
 end
 
 -- ── Helpers ───────────────────────────────────────────────────────────────────
-local function send(msgType, body)
-    if modemOpen then
-        rednet.broadcast({ type = msgType, body = body, time = os.time() }, REDNET_PROTOCOL)
-    end
-end
-
 local function printStatus(line)
     local ts = os.date("%H:%M:%S")
     print(string.format("[%s] %s", ts, line))
 end
 
+-- Collect all reactor stats into a flat table in one place.
+-- Every broadcast includes this so the pocket app always has fresh data.
+local function collectStats()
+    local s = {}
+    local methods = {
+        "getTemperature", "getStatus", "getBurnRate", "getActualBurnRate",
+        "getMaxBurnRate", "getFuelFilledPercentage", "getWasteFilledPercentage",
+        "getCoolantFilledPercentage", "getHeatedCoolantFilledPercentage",
+        "getDamagePercent",
+    }
+    for _, name in ipairs(methods) do
+        if reactor[name] then
+            local ok, val = pcall(reactor[name], reactor)
+            if ok and val ~= nil then
+                s[name] = val
+            end
+        end
+    end
+    return s
+end
+
+local function send(msgType, body, stats)
+    if modemOpen then
+        rednet.broadcast({
+            type  = msgType,
+            body  = body,
+            stats = stats or {},   -- always present — pocket app reads from here
+            time  = os.time(),
+        }, REDNET_PROTOCOL)
+    end
+end
+
 -- ── Alarm coroutine ───────────────────────────────────────────────────────────
--- Runs in parallel. Loops scram_alarm.dfpwm across ALL attached speakers
--- while alarm_active is true. Resets the dfpwm decoder each loop so the file
--- plays from the start cleanly. Yields properly so the reactor loop still runs.
 local function alarmLoop()
     local dfpwm = require("cc.audio.dfpwm")
-
     while true do
         if not alarm_active then
-            -- Nothing to do — yield and wait
             os.sleep(0.1)
         else
-            -- Find all speakers each loop (handles hot-plug)
             local speakers = { peripheral.find("speaker") }
             if #speakers == 0 then
                 printStatus("WARN: alarm_active but no speakers found!")
                 os.sleep(1)
             elseif not fs.exists(ALARM_FILE) then
-                printStatus("WARN: " .. ALARM_FILE .. " not found on this computer.")
+                printStatus("WARN: " .. ALARM_FILE .. " not found.")
                 os.sleep(1)
             else
-                -- One decoder per speaker per file-pass to keep state clean
                 local decoders = {}
-                for i = 1, #speakers do
-                    decoders[i] = dfpwm.make_decoder()
-                end
+                for i = 1, #speakers do decoders[i] = dfpwm.make_decoder() end
 
                 for chunk in io.lines(ALARM_FILE, 16 * 1024) do
                     if not alarm_active then break end
                     for i, spk in ipairs(speakers) do
                         local ok, buf = pcall(decoders[i], chunk)
                         if ok then
-                            -- Retry until buffer accepts the chunk
-                            local played = false
                             local attempts = 0
-                            while not played and attempts < 20 do
+                            while attempts < 20 do
                                 local ok2, result = pcall(spk.playAudio, buf, ALARM_VOLUME)
-                                if ok2 and result then
-                                    played = true
-                                else
-                                    os.pullEvent("speaker_audio_empty")
-                                end
+                                if ok2 and result then break end
+                                os.pullEvent("speaker_audio_empty")
                                 attempts = attempts + 1
                             end
                         end
                     end
                 end
-                -- File finished — loop will restart at top of while true
             end
         end
     end
@@ -124,95 +140,107 @@ local function reactorLoop()
     printStatus("Press Ctrl+T to stop.")
 
     while true do
-        -- ── Poll temperature ──────────────────────────────────────────────────
-        local ok, val = pcall(reactor.getTemperature)
-        if not ok or val == nil then
-            printStatus("ERROR: getTemperature() failed — " .. tostring(val))
-            send("ERROR", "Temperature read failed")
+        -- ── Collect all stats in one shot ─────────────────────────────────────
+        local ok, stats = pcall(collectStats)
+        if not ok or not stats then
+            printStatus("ERROR: stat collection failed — " .. tostring(stats))
+            send("ERROR", "Stat collection failed", {})
             alarm_active = true
             os.sleep(SCAN_INTERVAL)
         else
-            temperature = val
+            temperature = stats.getTemperature or 0
 
-            -- ── Evaluate SCRAM condition ──────────────────────────────────────
+            -- ── Detect manual SCRAM (reactor went offline without us doing it) ─
+            -- getStatus() returns true when the reactor is actively burning.
+            -- If we didn't command a SCRAM but the reactor is now off, something
+            -- external scrammed it — treat it as a manual hold.
+            local reactorOn = stats.getStatus
+            if reactorOn == false and not scram and not manual_hold and not failsafe then
+                manual_hold = true
+                alarm_active = true
+                printStatus("External SCRAM detected — manual reactivation required.")
+                send("MANUAL_SCRAM", "External SCRAM detected", stats)
+            end
+
+            -- ── Evaluate over-temperature ──────────────────────────────────────
             if temperature > CRITICAL_TEMP then
                 if not scram then
-                    -- Rising edge: new trip
                     fail_count = fail_count + 1
                     printStatus(string.format(
                         "TRIP #%d — Temp %.1fK exceeds %dK", fail_count, temperature, CRITICAL_TEMP
                     ))
-                    send("SCRAM_ALERT", string.format("Trip #%d at %.1fK", fail_count, temperature))
                 end
                 scram = true
-
+                alarm_active = true
                 if fail_count >= FAILSAFE_TRIPS then
                     failsafe = true
                 end
 
             elseif temperature < RESUME_TEMP and scram and not failsafe then
-                -- Safe to clear SCRAM (only if not in failsafe)
+                -- Temperature safe — clear the temp-SCRAM but still require
+                -- explicit activate to restart (manual_hold logic handles this)
                 scram = false
-                printStatus(string.format("Temp %.1fK — SCRAM cleared.", temperature))
-                send("SCRAM_CLEARED", string.format("Temp %.1fK", temperature))
+                manual_hold = true   -- don't auto-restart; wait for operator
+                printStatus(string.format("Temp %.1fK — SCRAM cleared. Awaiting activate.", temperature))
+                send("SCRAM_CLEARED", string.format("Temp %.1fK, awaiting activate", temperature), stats)
             end
 
-            -- ── Act on state ──────────────────────────────────────────────────
+            -- ── Act on state ───────────────────────────────────────────────────
             if failsafe then
-                -- Hard lockout — SCRAM and demand operator intervention
                 alarm_active = true
-                local ok2, err2 = pcall(reactor.scram)
-                if not ok2 then
-                    printStatus("ERROR: scram() call failed — " .. tostring(err2))
-                end
-                printStatus("!! FAILSAFE ACTIVE !! Operator reset required.")
+                pcall(reactor.scram)
                 printStatus(string.format(
-                    "   %d consecutive trips | Current temp: %.1fK", fail_count, temperature
+                    "!! FAILSAFE !! %d trips | Temp: %.1fK | Type 'reset' to clear:",
+                    fail_count, temperature
                 ))
-                send("FAILSAFE", string.format("%d trips, %.1fK", fail_count, temperature))
+                send("FAILSAFE", string.format("%d trips, %.1fK", fail_count, temperature), stats)
 
-                -- Block here until operator presses Enter
-                print("")
-                print("Type  reset  and press Enter to clear failsafe:")
+                -- Block until local operator types reset
                 local input = read()
                 if input == "reset" then
-                    failsafe   = false
-                    scram      = false
-                    fail_count = 0
+                    failsafe     = false
+                    scram        = false
+                    manual_hold  = true   -- still require explicit activate
+                    fail_count   = 0
                     alarm_active = false
-                    printStatus("Failsafe cleared by operator. Monitoring resumed.")
-                    send("FAILSAFE_RESET", "Operator reset")
+                    printStatus("Failsafe cleared by operator. Send 'activate' to restart.")
+                    send("FAILSAFE_RESET", "Operator reset — awaiting activate", stats)
                 end
-                -- Loop back to top without sleeping so we re-evaluate immediately
 
             elseif scram then
                 alarm_active = true
-                local ok2, err2 = pcall(reactor.scram)
-                if not ok2 then
-                    printStatus("ERROR: scram() call failed — " .. tostring(err2))
-                end
-                printStatus(string.format("SCRAM active | Temp: %.1fK | Trips: %d", temperature, fail_count))
-                send("SCRAM", string.format("Temp %.1fK", temperature))
+                pcall(reactor.scram)
+                printStatus(string.format(
+                    "SCRAM | Temp: %.1fK | Trips: %d", temperature, fail_count
+                ))
+                send("SCRAM", string.format("Temp %.1fK", temperature), stats)
+                os.sleep(SCAN_INTERVAL)
+
+            elseif manual_hold then
+                -- Reactor was stopped externally or after a temp-SCRAM cleared.
+                -- Hold it off and wait for an explicit activate command.
+                alarm_active = true
+                pcall(reactor.scram)
+                printStatus(string.format(
+                    "HOLD | Temp: %.1fK | Awaiting manual activate", temperature
+                ))
+                send("MANUAL_HOLD", string.format("Temp %.1fK", temperature), stats)
                 os.sleep(SCAN_INTERVAL)
 
             else
                 alarm_active = false
-                local ok2, err2 = pcall(reactor.activate)
-                if not ok2 then
-                    printStatus("ERROR: activate() call failed — " .. tostring(err2))
-                end
-                printStatus(string.format("OK | Temp: %.1fK | Trips: %d", temperature, fail_count))
-                send("STATUS", string.format("Temp %.1fK", temperature))
+                pcall(reactor.activate)
+                printStatus(string.format(
+                    "OK | Temp: %.1fK | Trips: %d", temperature, fail_count
+                ))
+                send("STATUS", string.format("Temp %.1fK", temperature), stats)
                 os.sleep(SCAN_INTERVAL)
             end
         end
     end
 end
 
--- ── Remote command listener ───────────────────────────────────────────────────
--- Listens for commands sent by the pocket companion app.
--- Runs as a third parallel coroutine. Mutates the same shared state flags
--- that reactorLoop reads, so commands take effect on the next scan cycle.
+-- ── Remote command listener ────────────────────────────────────────────────────
 local function commandLoop()
     if not modemOpen then return end
     while true do
@@ -220,28 +248,37 @@ local function commandLoop()
         if id and type(msg) == "table" and type(msg.command) == "string" then
             local cmd = msg.command
             printStatus("CMD from #" .. id .. ": " .. cmd)
+
             if cmd == "activate" then
                 if failsafe then
-                    printStatus("CMD REJECTED: failsafe active.")
+                    printStatus("CMD REJECTED: failsafe active — reset first.")
                 elseif scram then
-                    printStatus("CMD REJECTED: SCRAM active, temp too high.")
+                    printStatus("CMD REJECTED: temp-SCRAM active — wait for cooldown.")
                 else
+                    manual_hold  = false
+                    alarm_active = false
                     pcall(reactor.activate)
-                    send("STATUS", "Remote activate")
+                    printStatus("Reactor activated by remote #" .. id)
+                    local s = collectStats and pcall(collectStats) and {} or {}
+                    send("STATUS", "Remote activate by #" .. id, s)
                 end
+
             elseif cmd == "scram" then
-                scram = true
+                manual_hold  = true
                 alarm_active = true
                 pcall(reactor.scram)
-                send("SCRAM", "Remote SCRAM")
+                printStatus("Remote SCRAM from #" .. id)
+                send("MANUAL_SCRAM", "Remote SCRAM by #" .. id, {})
+
             elseif cmd == "reset" then
                 if failsafe then
                     failsafe     = false
                     scram        = false
+                    manual_hold  = true   -- still require explicit activate
                     fail_count   = 0
                     alarm_active = false
-                    printStatus("Failsafe cleared remotely by pocket (#" .. id .. ")")
-                    send("FAILSAFE_RESET", "Remote reset by #" .. id)
+                    printStatus("Failsafe cleared remotely by #" .. id)
+                    send("FAILSAFE_RESET", "Remote reset by #" .. id, {})
                 else
                     printStatus("CMD: reset ignored (not in failsafe)")
                 end
@@ -250,13 +287,10 @@ local function commandLoop()
     end
 end
 
--- ── Run all three loops in parallel ──────────────────────────────────────────
+-- ── Run ───────────────────────────────────────────────────────────────────────
 local ok, err = pcall(parallel.waitForAny, reactorLoop, alarmLoop, commandLoop)
 if not ok then
     print("FATAL crash: " .. tostring(err))
 end
-
-if modemOpen then
-    rednet.close(MODEM_SIDE)
-end
+if modemOpen then rednet.close(MODEM_SIDE) end
 print("Monitor stopped.")
