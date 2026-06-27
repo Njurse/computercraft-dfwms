@@ -6,7 +6,7 @@
 local TEMP_THRESHOLD = 1200          -- Kelvin
 local REACTOR_SIDE = "left"          -- Side where the logic adapter is
 local MODEM_SIDE = "right"           -- Side for wireless modem (nil to disable)
-local REDNET_CHANNEL = 42            -- Channel for broadcasting
+local REDNET_PROTOCOL = "reactor_monitor"  -- Protocol string for rednet filtering
 local CHECK_INTERVAL = 1             -- Seconds between checks
 local STATUS_INTERVAL = 10           -- Seconds between status broadcasts
 
@@ -26,7 +26,7 @@ end
 local modemOpen = false
 if MODEM_SIDE and peripheral.isPresent(MODEM_SIDE) then
     local modem = peripheral.wrap(MODEM_SIDE)
-    if modem and modem.isWireless then
+    if modem and modem.isWireless and modem.isWireless() then
         rednet.open(MODEM_SIDE)
         modemOpen = true
         print("Wireless modem opened on '" .. MODEM_SIDE .. "'.")
@@ -46,7 +46,7 @@ local function sendMessage(msgType, formattedMessage, rawData)
             stats = rawData,          -- structured data for receivers that parse
             time = os.time()
         }
-        rednet.broadcast(data, REDNET_CHANNEL)
+        rednet.broadcast(data, REDNET_PROTOCOL)
         print("[REDNET] " .. msgType .. " sent.")
     end
 end
@@ -58,15 +58,15 @@ local function getReactorStats()
     -- List of method names and how to format them
     local methods = {
         getTemperature           = { label = "Temperature",     fmt = "%.1f K" },
-        getBoilEfficiency        = { label = "Boil Efficiency", fmt = "%.1f %%" },
         getFuelFilledPercentage  = { label = "Fuel Fill",       fmt = "%.1f %%" },
         getWasteFilledPercentage = { label = "Waste Fill",      fmt = "%.1f %%" },
         getBurnRate              = { label = "Burn Rate",        fmt = "%.1f mb/t" },
+        getActualBurnRate        = { label = "Actual Burn Rate",fmt = "%.1f mb/t" },
         getMaxBurnRate           = { label = "Max Burn Rate",   fmt = "%.1f mb/t" },
         getStatus                = { label = "Status",          fmt = "%s" },
-        isFormed                 = { label = "Formed",          fmt = "%s" },
-        isBurning                = { label = "Burning",         fmt = "%s" },
-        getActive                = { label = "Active",          fmt = "%s" },
+        getDamagePercent         = { label = "Damage",          fmt = "%.2f %%" },
+        getCoolantFilledPercentage = { label = "Coolant Fill",  fmt = "%.1f %%" },
+        getHeatedCoolantFilledPercentage = { label = "Heated Coolant Fill", fmt = "%.1f %%" },
     }
 
     for method, info in pairs(methods) do
