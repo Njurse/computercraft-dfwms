@@ -57,16 +57,16 @@ local function getReactorStats()
 
     -- List of method names and how to format them
     local methods = {
-        getTemperature      = { label = "Temperature",      fmt = "%.1f K" },
-        getBoilEfficiency   = { label = "Boil Efficiency",  fmt = "%.1f %%" },
-        getFuelFilledPercentage = { label = "Fuel Fill",    fmt = "%.1f %%" },
-        getWasteFilledPercentage = { label = "Waste Fill",  fmt = "%.1f %%" },
-        getBurnRate         = { label = "Burn Rate",        fmt = "%.1f mb/t" },
-        getMaxBurnRate      = { label = "Max Burn Rate",    fmt = "%.1f mb/t" },
-        getStatus           = { label = "Status",           fmt = "%s" },
-        isFormed            = { label = "Formed",           fmt = "%s" },
-        isBurning           = { label = "Burning",          fmt = "%s" },
-        getActive           = { label = "Active",           fmt = "%s" },   -- alternate name
+        getTemperature           = { label = "Temperature",     fmt = "%.1f K" },
+        getBoilEfficiency        = { label = "Boil Efficiency", fmt = "%.1f %%" },
+        getFuelFilledPercentage  = { label = "Fuel Fill",       fmt = "%.1f %%" },
+        getWasteFilledPercentage = { label = "Waste Fill",      fmt = "%.1f %%" },
+        getBurnRate              = { label = "Burn Rate",        fmt = "%.1f mb/t" },
+        getMaxBurnRate           = { label = "Max Burn Rate",   fmt = "%.1f mb/t" },
+        getStatus                = { label = "Status",          fmt = "%s" },
+        isFormed                 = { label = "Formed",          fmt = "%s" },
+        isBurning                = { label = "Burning",         fmt = "%s" },
+        getActive                = { label = "Active",          fmt = "%s" },
     }
 
     for method, info in pairs(methods) do
@@ -92,18 +92,20 @@ local function getReactorStats()
         local lines = {}
         table.insert(lines, "")
         table.insert(lines, "=== " .. header .. " ===")
+
         -- Determine the longest label to align colons
         local maxLen = 0
         for label, _ in pairs(stats) do
-            if type(label) == "string" and not label:match("^get") then
-                local len = #label
-                if len > maxLen then maxLen = len end
+            -- BUG FIX: skip raw method-name keys (e.g. "getTemperature")
+            if type(label) == "string" and not label:match("^get") and not label:match("^is") then
+                if #label > maxLen then maxLen = #label end
             end
         end
+
         -- Sort labels for consistent output
         local sortedLabels = {}
         for label, _ in pairs(stats) do
-            if type(label) == "string" and not label:match("^get") then
+            if type(label) == "string" and not label:match("^get") and not label:match("^is") then
                 table.insert(sortedLabels, label)
             end
         end
@@ -111,8 +113,10 @@ local function getReactorStats()
 
         for _, label in ipairs(sortedLabels) do
             local padding = string.rep(" ", maxLen - #label + 2)
-            lines.insert(lines, label .. ":" .. padding .. stats[label])
+            -- BUG FIX: was "lines.insert" (invalid), must be "table.insert"
+            table.insert(lines, label .. ":" .. padding .. tostring(stats[label]))
         end
+
         table.insert(lines, string.rep("=", maxLen + 10))
         return table.concat(lines, "\n")
     end
@@ -129,50 +133,52 @@ local statusTimer = 0
 
 while true do
     local stats, report = getReactorStats()
-    local temp = stats.getTemperature or math.huge   -- fallback to trigger if missing
+    -- BUG FIX: use nil as fallback instead of math.huge so a missing
+    -- temperature triggers the "unformed?" warning rather than a SCRAM
+    local temp = stats.getTemperature
 
-    -- Display the full report on screen (once per check, but only when threshold safe)
-    if temp and temp <= TEMP_THRESHOLD then
-        -- Only print a short status line to avoid spam, but we'll print full report on interval
+    if temp ~= nil and temp <= TEMP_THRESHOLD then
+        -- Normal operating range
         statusTimer = statusTimer + CHECK_INTERVAL
         if statusTimer >= STATUS_INTERVAL then
-            print(report("Reactor Status"))
-            sendMessage("STATUS", report("Reactor Status"), stats)
+            local fullReport = report("Reactor Status")
+            print(fullReport)
+            sendMessage("STATUS", fullReport, stats)
             statusTimer = 0
         else
-            -- Brief update
+            -- Brief status line between full reports
             print(string.format("[%s] Temp: %.1fK | Fuel: %s | Waste: %s",
                 os.date("%H:%M:%S"),
-                temp or 0,
+                temp,
                 stats["Fuel Fill"] or "N/A",
                 stats["Waste Fill"] or "N/A"
             ))
         end
-    else
-        -- Temperature exceeds threshold or couldn't be read
-        if temp and temp > TEMP_THRESHOLD then
-            local alertMsg = "⚠️ TEMPERATURE EXCEEDED! " ..
-                string.format("Temp = %.1fK (Threshold = %dK)", temp, TEMP_THRESHOLD)
-            print("WARNING: " .. alertMsg)
 
-            -- Send full report as SCRAM alert
-            local scramReport = report("SCRAM TRIGGERED")
-            sendMessage("SCRAM_ALERT", scramReport, stats)
+    elseif temp ~= nil and temp > TEMP_THRESHOLD then
+        -- Over-temperature: SCRAM
+        local alertMsg = "TEMPERATURE EXCEEDED! " ..
+            string.format("Temp = %.1fK (Threshold = %dK)", temp, TEMP_THRESHOLD)
+        print("WARNING: " .. alertMsg)
 
-            -- SCRAM the reactor
-            local ok, err = pcall(reactor.scram, reactor)
-            if ok then
-                print("✅ Reactor SCRAMMED successfully.")
-                sendMessage("SCRAM_SUCCESS", "Reactor SCRAMMED at " .. string.format("%.1fK", temp), stats)
-            else
-                print("❌ Failed to SCRAM: " .. tostring(err))
-            end
-            break
+        local scramReport = report("SCRAM TRIGGERED")
+        print(scramReport)
+        sendMessage("SCRAM_ALERT", scramReport, stats)
+
+        local ok, err = pcall(reactor.scram, reactor)
+        if ok then
+            print("Reactor SCRAMMED successfully.")
+            sendMessage("SCRAM_SUCCESS", "Reactor SCRAMMED at " .. string.format("%.1fK", temp), stats)
         else
-            -- Could not read temperature (unformed, etc.)
-            print("⚠️ Cannot read temperature. Is the reactor formed?")
-            sendMessage("ERROR", "Temperature read failed. Reactor may be unformed.", { error = "no_temp" })
+            print("Failed to SCRAM: " .. tostring(err))
+            sendMessage("SCRAM_FAILED", "SCRAM failed: " .. tostring(err), stats)
         end
+        break
+
+    else
+        -- Temperature unreadable (reactor unformed, peripheral error, etc.)
+        print("WARNING: Cannot read temperature. Is the reactor formed?")
+        sendMessage("ERROR", "Temperature read failed. Reactor may be unformed.", { error = "no_temp" })
     end
 
     sleep(CHECK_INTERVAL)
