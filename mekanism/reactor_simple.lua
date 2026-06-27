@@ -1,49 +1,185 @@
 -- reactor_scram.lua
--- A simple script to monitor a Mekanism Fission Reactor and SCRAM it if the temperature exceeds a set threshold.
+-- Monitors a Mekanism Fission Reactor, SCRAMs at a temperature threshold,
+-- and sends neatly formatted status reports over Rednet.
 
 -- Configuration
-local TEMP_THRESHOLD = 1200 -- Temperature in Kelvin. Mekanism's 'High Temperature' threshold is 1200K[reference:8].
-local REACTOR_SIDE = "left"  -- The side of the computer the reactor logic adapter is on. Change this as needed.
-local CHECK_INTERVAL = 1     -- How often to check the temperature, in seconds.
+local TEMP_THRESHOLD = 1200          -- Kelvin
+local REACTOR_SIDE = "left"          -- Side where the logic adapter is
+local MODEM_SIDE = "right"           -- Side for wireless modem (nil to disable)
+local REDNET_CHANNEL = 42            -- Channel for broadcasting
+local CHECK_INTERVAL = 1             -- Seconds between checks
+local STATUS_INTERVAL = 10           -- Seconds between status broadcasts
 
--- Find the reactor peripheral
-local reactor = peripheral.find("fissionReactorLogicAdapter")
-
-if reactor == nil then
-    print("ERROR: Could not find a Fission Reactor Logic Adapter.")
-    print("Make sure it is connected to your computer and is on the network.")
+-- Wrap the reactor peripheral
+local reactor = peripheral.wrap(REACTOR_SIDE)
+if not reactor then
+    print("ERROR: No reactor logic adapter on side '" .. REACTOR_SIDE .. "'.")
     return
 end
 
-print("Reactor SCRAM monitor started.")
-print("Monitoring temperature on side: " .. REACTOR_SIDE)
-print("SCRAM threshold set to: " .. TEMP_THRESHOLD .. "K")
-print("Press Ctrl + T to stop the script.")
+if not reactor.getTemperature then
+    print("ERROR: Peripheral on '" .. REACTOR_SIDE .. "' is not a Fission Reactor Logic Adapter.")
+    return
+end
 
--- Main monitoring loop
-while true do
-    -- Get the reactor's current temperature
-    -- Note: The exact method to get temperature might vary.
-    -- This example assumes the reactor peripheral has a getTemperature() function.
-    -- You may need to adapt this based on your specific peripherals (e.g., using a Fission Reactor Logic Adapter).
-    local temperature = reactor.getTemperature()
-
-    if temperature == nil then
-        print("WARNING: Could not read temperature. Is the reactor formed?")
-    elseif temperature > TEMP_THRESHOLD then
-        print("WARNING: Temperature (" .. temperature .. "K) exceeded threshold (" .. TEMP_THRESHOLD .. "K)! SCRAMMING REACTOR!")
-        -- SCRAM the reactor. The scram() function deactivates the reactor[reference:9].
-        reactor.scram()
-        print("Reactor has been SCRAMMED.")
-        -- Optional: Add a redstone signal or other alert here.
-        -- The script stops after a SCRAM to prevent it from immediately re-enabling the reactor.
-        break
+-- Setup wireless modem
+local modemOpen = false
+if MODEM_SIDE and peripheral.isPresent(MODEM_SIDE) then
+    local modem = peripheral.wrap(MODEM_SIDE)
+    if modem and modem.isWireless then
+        rednet.open(MODEM_SIDE)
+        modemOpen = true
+        print("Wireless modem opened on '" .. MODEM_SIDE .. "'.")
     else
-        -- Print status every few checks to show it's working
-        -- print("Temperature: " .. temperature .. "K (Safe)")
+        print("WARNING: No wireless modem on '" .. MODEM_SIDE .. "'.")
+    end
+else
+    print("Wireless disabled.")
+end
+
+-- Helper to broadcast a message
+local function sendMessage(msgType, formattedMessage, rawData)
+    if modemOpen then
+        local data = {
+            type = msgType,
+            message = formattedMessage,
+            stats = rawData,          -- structured data for receivers that parse
+            time = os.time()
+        }
+        rednet.broadcast(data, REDNET_CHANNEL)
+        print("[REDNET] " .. msgType .. " sent.")
+    end
+end
+
+-- Collect all available reactor statistics
+local function getReactorStats()
+    local stats = {}
+
+    -- List of method names and how to format them
+    local methods = {
+        getTemperature      = { label = "Temperature",      fmt = "%.1f K" },
+        getBoilEfficiency   = { label = "Boil Efficiency",  fmt = "%.1f %%" },
+        getFuelFilledPercentage = { label = "Fuel Fill",    fmt = "%.1f %%" },
+        getWasteFilledPercentage = { label = "Waste Fill",  fmt = "%.1f %%" },
+        getBurnRate         = { label = "Burn Rate",        fmt = "%.1f mb/t" },
+        getMaxBurnRate      = { label = "Max Burn Rate",    fmt = "%.1f mb/t" },
+        getStatus           = { label = "Status",           fmt = "%s" },
+        isFormed            = { label = "Formed",           fmt = "%s" },
+        isBurning           = { label = "Burning",          fmt = "%s" },
+        getActive           = { label = "Active",           fmt = "%s" },   -- alternate name
+    }
+
+    for method, info in pairs(methods) do
+        if reactor[method] then
+            local ok, val = pcall(reactor[method], reactor)
+            if ok and val ~= nil then
+                -- Convert boolean to Yes/No
+                if type(val) == "boolean" then
+                    val = val and "Yes" or "No"
+                end
+                stats[method] = val
+                stats[info.label] = string.format(info.fmt, val)
+            else
+                stats[info.label] = "N/A"
+            end
+        else
+            stats[info.label] = "N/A"
+        end
+    end
+
+    -- Build a neat, boxed status report
+    local function buildReport(header)
+        local lines = {}
+        table.insert(lines, "")
+        table.insert(lines, "=== " .. header .. " ===")
+        -- Determine the longest label to align colons
+        local maxLen = 0
+        for label, _ in pairs(stats) do
+            if type(label) == "string" and not label:match("^get") then
+                local len = #label
+                if len > maxLen then maxLen = len end
+            end
+        end
+        -- Sort labels for consistent output
+        local sortedLabels = {}
+        for label, _ in pairs(stats) do
+            if type(label) == "string" and not label:match("^get") then
+                table.insert(sortedLabels, label)
+            end
+        end
+        table.sort(sortedLabels)
+
+        for _, label in ipairs(sortedLabels) do
+            local padding = string.rep(" ", maxLen - #label + 2)
+            lines.insert(lines, label .. ":" .. padding .. stats[label])
+        end
+        table.insert(lines, string.rep("=", maxLen + 10))
+        return table.concat(lines, "\n")
+    end
+
+    return stats, buildReport
+end
+
+-- Main loop
+print("Reactor SCRAM monitor started.")
+print("Threshold: " .. TEMP_THRESHOLD .. "K, Check interval: " .. CHECK_INTERVAL .. "s")
+print("Press Ctrl+T to stop.")
+
+local statusTimer = 0
+
+while true do
+    local stats, report = getReactorStats()
+    local temp = stats.getTemperature or math.huge   -- fallback to trigger if missing
+
+    -- Display the full report on screen (once per check, but only when threshold safe)
+    if temp and temp <= TEMP_THRESHOLD then
+        -- Only print a short status line to avoid spam, but we'll print full report on interval
+        statusTimer = statusTimer + CHECK_INTERVAL
+        if statusTimer >= STATUS_INTERVAL then
+            print(report("Reactor Status"))
+            sendMessage("STATUS", report("Reactor Status"), stats)
+            statusTimer = 0
+        else
+            -- Brief update
+            print(string.format("[%s] Temp: %.1fK | Fuel: %s | Waste: %s",
+                os.date("%H:%M:%S"),
+                temp or 0,
+                stats["Fuel Fill"] or "N/A",
+                stats["Waste Fill"] or "N/A"
+            ))
+        end
+    else
+        -- Temperature exceeds threshold or couldn't be read
+        if temp and temp > TEMP_THRESHOLD then
+            local alertMsg = "⚠️ TEMPERATURE EXCEEDED! " ..
+                string.format("Temp = %.1fK (Threshold = %dK)", temp, TEMP_THRESHOLD)
+            print("WARNING: " .. alertMsg)
+
+            -- Send full report as SCRAM alert
+            local scramReport = report("SCRAM TRIGGERED")
+            sendMessage("SCRAM_ALERT", scramReport, stats)
+
+            -- SCRAM the reactor
+            local ok, err = pcall(reactor.scram, reactor)
+            if ok then
+                print("✅ Reactor SCRAMMED successfully.")
+                sendMessage("SCRAM_SUCCESS", "Reactor SCRAMMED at " .. string.format("%.1fK", temp), stats)
+            else
+                print("❌ Failed to SCRAM: " .. tostring(err))
+            end
+            break
+        else
+            -- Could not read temperature (unformed, etc.)
+            print("⚠️ Cannot read temperature. Is the reactor formed?")
+            sendMessage("ERROR", "Temperature read failed. Reactor may be unformed.", { error = "no_temp" })
+        end
     end
 
     sleep(CHECK_INTERVAL)
 end
 
+-- Cleanup
+if modemOpen then
+    rednet.close(MODEM_SIDE)
+end
 print("Reactor monitor stopped.")
