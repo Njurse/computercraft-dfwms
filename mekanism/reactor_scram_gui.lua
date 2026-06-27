@@ -3,21 +3,21 @@
 -- Logic Adapter on back, wireless modem on right.
 -- Terminal: 51x19 normal computer with full-screen control panel.
 
--- ── Configuration ─────────────────────────────────────────────────────────────
+-- -- Configuration -------------------------------------------------------------
 local REACTOR_SIDE    = "back"
 local MODEM_SIDE      = "right"
 local REDNET_PROTOCOL = "reactor_monitor"
 local CMD_PROTOCOL    = "reactor_cmd"
 
-local CRITICAL_TEMP   = 1000   -- K  → above this triggers SCRAM
-local RESUME_TEMP     = 350    -- K  → below this allows clearing a temp-SCRAM
+local CRITICAL_TEMP   = 1000   -- K  -> above this triggers SCRAM
+local RESUME_TEMP     = 350    -- K  -> below this allows clearing a temp-SCRAM
 local SCAN_INTERVAL   = 2.0    -- seconds between polls
 local FAILSAFE_TRIPS  = 2      -- consecutive temp-SCRAMs before operator lockout
 
 local ALARM_FILE      = "scram_alarm.dfpwm"
 local ALARM_VOLUME    = 3.0
 
--- ── Layout constants ──────────────────────────────────────────────────────────
+-- -- Layout constants ----------------------------------------------------------
 local W, H = term.getSize()   -- typically 51 x 19
 local LOG_LINES = 5           -- scrolling log at bottom
 -- Row assignments:
@@ -35,7 +35,7 @@ local BTN_ROW     = 14
 local LOG_TOP     = 16
 local LOG_BOTTOM  = H - 1
 
--- ── Colours ───────────────────────────────────────────────────────────────────
+-- -- Colours -------------------------------------------------------------------
 -- Falls back gracefully if the terminal is monochrome.
 local function C(col)
     if term.isColour() then term.setTextColour(col) end
@@ -50,7 +50,7 @@ local function resetColour()
     end
 end
 
--- ── State ─────────────────────────────────────────────────────────────────────
+-- -- State ---------------------------------------------------------------------
 local scram        = false
 local manual_hold  = false
 local failsafe     = false
@@ -67,7 +67,7 @@ local log_head     = 1   -- index of oldest entry (next to be overwritten)
 -- Event name used to wake the reactor loop early when state changes via UI
 local UI_EVENT     = "reactor_ui_cmd"
 
--- ── Peripherals ───────────────────────────────────────────────────────────────
+-- -- Peripherals ---------------------------------------------------------------
 local reactor = peripheral.wrap(REACTOR_SIDE)
 if not reactor then
     print("FATAL: No peripheral on side '" .. REACTOR_SIDE .. "'.")
@@ -89,7 +89,7 @@ if peripheral.isPresent(MODEM_SIDE) then
     end
 end
 
--- ── Helpers ───────────────────────────────────────────────────────────────────
+-- -- Helpers -------------------------------------------------------------------
 local function collectStats()
     local s = {}
     local ok, v
@@ -118,7 +118,7 @@ local function send(msgType, body, stats)
     end
 end
 
--- ── On-screen log ─────────────────────────────────────────────────────────────
+-- -- On-screen log -------------------------------------------------------------
 local function logPush(line)
     local ts = os.date("%H:%M:%S")
     local entry = string.format("[%s] %s", ts, line)
@@ -128,7 +128,7 @@ local function logPush(line)
     log_head = (log_head % #log_buf) + 1
 end
 
--- ── Drawing ───────────────────────────────────────────────────────────────────
+-- -- Drawing -------------------------------------------------------------------
 local function writeAt(x, y, text)
     term.setCursorPos(x, y)
     term.write(text)
@@ -168,16 +168,16 @@ end
 -- Determine banner colour/text from current state
 local function bannerInfo()
     if failsafe then
-        return "!! FAILSAFE — MANUAL RESET REQUIRED !!",
+        return "!! FAILSAFE - MANUAL RESET REQUIRED !!",
                colours.white, colours.red
     elseif scram then
-        return string.format("SCRAM — OVER TEMP (trip %d/%d)", fail_count, FAILSAFE_TRIPS),
+        return string.format("SCRAM - OVER TEMP (trip %d/%d)", fail_count, FAILSAFE_TRIPS),
                colours.black, colours.orange
     elseif manual_hold then
-        return "HOLD — AWAITING ACTIVATE COMMAND",
+        return "HOLD - AWAITING ACTIVATE COMMAND",
                colours.black, colours.yellow
     else
-        return "REACTOR ONLINE — NORMAL OPERATION",
+        return "REACTOR ONLINE - NORMAL OPERATION",
                colours.black, colours.lime
     end
 end
@@ -201,10 +201,10 @@ local function drawPanel()
 
     -- Row 3: separator
     resetColour()
-    fillRow(3, "─", colours.grey, colours.black)
+    fillRow(3, "-", colours.grey, colours.black)
 
-    -- ── Stats grid ────────────────────────────────────────────────────────────
-    -- Two columns, 9 rows (rows 4–12)
+    -- -- Stats grid ------------------------------------------------------------
+    -- Two columns, 9 rows (rows 4-12)
     local s = last_stats
     local tempK    = s.getTemperature or 0
     local tempCol  = tempK > CRITICAL_TEMP and colours.red
@@ -255,7 +255,7 @@ local function drawPanel()
 
     -- Row 13: separator
     resetColour()
-    fillRow(13, "─", colours.grey, colours.black)
+    fillRow(13, "-", colours.grey, colours.black)
 
     -- Row 14: button hints
     resetColour()
@@ -286,7 +286,7 @@ local function drawPanel()
 
     -- Row 15: separator
     resetColour()
-    fillRow(15, "─", colours.grey, colours.black)
+    fillRow(15, "-", colours.grey, colours.black)
 
     -- Rows 16..H-1: rolling log
     local logLen = #log_buf
@@ -312,7 +312,7 @@ local function drawPanel()
     term.setCursorPos(1, H)   -- park cursor out of the way
 end
 
--- ── Alarm coroutine ───────────────────────────────────────────────────────────
+-- -- Alarm coroutine -----------------------------------------------------------
 local function alarmLoop()
     local dfpwm = require("cc.audio.dfpwm")
     while true do
@@ -345,7 +345,7 @@ local function alarmLoop()
     end
 end
 
--- ── Reactor logic (runs every SCAN_INTERVAL or when woken by UI_EVENT) ────────
+-- -- Reactor logic (runs every SCAN_INTERVAL or when woken by UI_EVENT) --------
 local function reactorLoop()
     logPush("Reactor monitor started.")
     logPush(string.format("Crit: %dK | Resume: %dK | Failsafe after %d trips",
@@ -354,7 +354,7 @@ local function reactorLoop()
     while true do
         local ok, stats = pcall(collectStats)
         if not ok or not stats then
-            logPush("ERROR: stat collection failed — " .. tostring(stats))
+            logPush("ERROR: stat collection failed - " .. tostring(stats))
             send("ERROR", "Stat collection failed", {})
             alarm_active = true
         else
@@ -365,7 +365,7 @@ local function reactorLoop()
             local reactorOn = stats.getStatus
             if reactorOn == false and not scram and not manual_hold and not failsafe then
                 manual_hold = true
-                logPush("External SCRAM detected — awaiting activate.")
+                logPush("External SCRAM detected - awaiting activate.")
                 send("MANUAL_SCRAM", "External SCRAM detected", stats)
             end
 
@@ -373,7 +373,7 @@ local function reactorLoop()
             if temperature > CRITICAL_TEMP then
                 if not scram then
                     fail_count = fail_count + 1
-                    logPush(string.format("TRIP #%d — Temp %.1fK exceeds %dK",
+                    logPush(string.format("TRIP #%d - Temp %.1fK exceeds %dK",
                         fail_count, temperature, CRITICAL_TEMP))
                 end
                 scram = true
@@ -388,7 +388,7 @@ local function reactorLoop()
             elseif temperature < RESUME_TEMP and scram and not failsafe then
                 scram       = false
                 manual_hold = true
-                logPush(string.format("Temp %.1fK — SCRAM cleared. Awaiting activate.", temperature))
+                logPush(string.format("Temp %.1fK - SCRAM cleared. Awaiting activate.", temperature))
                 send("SCRAM_CLEARED", string.format("Temp %.1fK, awaiting activate", temperature), stats)
             end
 
@@ -430,7 +430,7 @@ local function reactorLoop()
     end
 end
 
--- ── Local keyboard input handler ──────────────────────────────────────────────
+-- -- Local keyboard input handler ----------------------------------------------
 -- Runs in parallel; posts UI_EVENT to wake reactorLoop immediately after a cmd.
 local function inputLoop()
     while true do
@@ -450,9 +450,9 @@ local function inputLoop()
         elseif key == keys.a then
             -- ACTIVATE
             if failsafe then
-                logPush("ACTIVATE rejected: failsafe active — press R to reset first.")
+                logPush("ACTIVATE rejected: failsafe active - press R to reset first.")
             elseif scram then
-                logPush("ACTIVATE rejected: temp-SCRAM active — wait for cooldown.")
+                logPush("ACTIVATE rejected: temp-SCRAM active - wait for cooldown.")
             elseif manual_hold then
                 manual_hold  = false
                 alarm_active = false
@@ -471,7 +471,7 @@ local function inputLoop()
                 fail_count   = 0
                 alarm_active = false
                 logPush("Failsafe cleared by local operator. Press A to activate.")
-                send("FAILSAFE_RESET", "Local operator reset — awaiting activate", {})
+                send("FAILSAFE_RESET", "Local operator reset - awaiting activate", {})
                 os.queueEvent(UI_EVENT)
             else
                 logPush("RESET ignored: not in failsafe.")
@@ -480,7 +480,7 @@ local function inputLoop()
     end
 end
 
--- ── Remote command listener ────────────────────────────────────────────────────
+-- -- Remote command listener ----------------------------------------------------
 local function commandLoop()
     if not modemOpen then return end
     while true do
@@ -491,9 +491,9 @@ local function commandLoop()
 
             if cmd == "activate" then
                 if failsafe then
-                    logPush("CMD REJECTED: failsafe active — reset first.")
+                    logPush("CMD REJECTED: failsafe active - reset first.")
                 elseif scram then
-                    logPush("CMD REJECTED: temp-SCRAM active — wait for cooldown.")
+                    logPush("CMD REJECTED: temp-SCRAM active - wait for cooldown.")
                 else
                     manual_hold  = false
                     alarm_active = false
@@ -529,7 +529,7 @@ local function commandLoop()
     end
 end
 
--- ── Run ───────────────────────────────────────────────────────────────────────
+-- -- Run -----------------------------------------------------------------------
 term.clear()
 term.setCursorPos(1, 1)
 local ok, err = pcall(parallel.waitForAny,
