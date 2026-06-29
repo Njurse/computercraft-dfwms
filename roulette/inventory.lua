@@ -1,7 +1,7 @@
 -- lib/inventory.lua
 -- Hardware-agnostic inventory and logistics abstraction.
 -- RouletteAdmin uses this to move shells between:
---   STORAGE  → MAGAZINE  → CHAMBER (visual)  → SPENT
+--   STORAGE  → MAGAZINE  → CHAMBER (visual display of currently loaded shell)
 --
 -- Supports:
 --   • Vanilla chests / barrels (inventory peripheral)
@@ -18,8 +18,8 @@ local Inventory = {}
 -- ── Role labels (used as keys in the peripheral table) ─────────────────────
 Inventory.ROLE = {
     STORAGE  = "storage",    -- Unused ammunition reserve
-    MAGAZINE = "magazine",   -- Currently loaded shells
-    SPENT    = "spent",      -- Fired shells
+    MAGAZINE = "magazine",   -- Shells loaded for the current round
+    CHAMBER  = "chamber",    -- Single-type drawer showing the currently chambered shell
 }
 
 -- ── Discovery ──────────────────────────────────────────────────────────────
@@ -27,10 +27,10 @@ Inventory.ROLE = {
 --- Scan all attached peripherals and find inventories.
 --- Returns a table mapping role → peripheral handle, or nil + error.
 ---
---- Roles are assigned by the SIZE of the inventory (or by item contents):
----   Largest chest  → STORAGE
----   Medium chest   → MAGAZINE
----   Smallest chest → SPENT
+--- Roles are assigned by the SIZE of the inventory:
+---   Largest chest   → STORAGE  (holds all spare shells)
+---   Medium chest    → MAGAZINE (holds 2-8 shells for the round)
+---   Smallest/single → CHAMBER  (1-slot drawer showing the loaded shell)
 ---
 --- If only one inventory is found it is assigned STORAGE and the game proceeds
 --- in software-only mode (items not physically moved).
@@ -58,7 +58,7 @@ function Inventory.discoverInventories()
     local roleOrder = {
         Inventory.ROLE.STORAGE,
         Inventory.ROLE.MAGAZINE,
-        Inventory.ROLE.SPENT,
+        Inventory.ROLE.CHAMBER,
     }
     for i, entry in ipairs(found) do
         local role = roleOrder[i] or ("extra_" .. i)
@@ -207,33 +207,73 @@ function Inventory.loadMagazine(roles, shellList, shellItems)
     return true, nil
 end
 
---- Move all spent shells from the MAGAZINE inventory to SPENT.
+--- Move all leftover shells from the MAGAZINE back to STORAGE.
+--- Called at the start of each round to clear the old magazine.
 ---@param roles table
 ---@return number moved
 function Inventory.clearMagazine(roles)
     local magazine = roles[Inventory.ROLE.MAGAZINE]
-    local spent    = roles[Inventory.ROLE.SPENT]
+    local storage  = roles[Inventory.ROLE.STORAGE]
     if not magazine then return 0 end
-    if spent then
-        return Inventory.transferAll(magazine, spent)
+
+    if storage and storage ~= magazine then
+        print("[Inv] Clearing leftover shells from magazine back to storage.")
+        return Inventory.transferAll(magazine, storage)
     else
-        -- No spent bin: try pushing back to STORAGE, or warn if neither exists
-        local storage = roles[Inventory.ROLE.STORAGE]
-        if storage and storage ~= magazine then
-            print("[Inv] WARNING: No SPENT bin; clearing magazine into STORAGE.")
-            local dstName = peripheral.getName(storage)
-            local items = magazine.list()
-            for slot, _ in pairs(items) do
-                pcall(function() magazine.pushItems(dstName, slot, 64) end)
-            end
-        else
-            print("[Inv] WARNING: No SPENT or STORAGE inventory; items will be lost.")
-            local items = magazine.list()
-            for slot, _ in pairs(items) do
-                print("[Inv] Slot " .. slot .. " has leftover items (no target to move to).")
-            end
+        print("[Inv] WARNING: No STORAGE to return leftover shells; they will be lost.")
+        local items = magazine.list()
+        for slot, _ in pairs(items) do
+            print("[Inv] Slot " .. slot .. " has leftover items (no target to move to).")
         end
         return 0
+    end
+end
+
+-- ── Chamber Display ────────────────────────────────────────────────────────
+
+--- Move one shell from the MAGAZINE into the CHAMBER drawer.
+--- This shows which shell is currently loaded/chambered for the turn.
+---@param roles     table   from discoverInventories()
+---@param shellItem string  Minecraft item ID (e.g. "mekanism:infused_alloy")
+---@return boolean, string|nil
+function Inventory.loadChamber(roles, shellItem)
+    local magazine = roles[Inventory.ROLE.MAGAZINE]
+    local chamber  = roles[Inventory.ROLE.CHAMBER]
+    if not magazine then
+        return false, "Magazine inventory missing."
+    end
+    if not chamber then
+        print("[Inv] No CHAMBER drawer configured; running headless.")
+        return true, nil  -- not a fatal error
+    end
+
+    -- Move one shell of the matching type from magazine to chamber
+    local moved = Inventory.transfer(magazine, chamber, shellItem, 1)
+    if moved < 1 then
+        return false, "Failed to move " .. shellItem .. " from magazine to chamber."
+    end
+    print("[Inv] Chambered: " .. shellItem)
+    return true, nil
+end
+
+--- Remove the shell from the CHAMBER drawer after firing.
+--- Pushes it back to STORAGE (or voids it if no STORAGE).
+---@param roles table
+function Inventory.clearChamber(roles)
+    local chamber = roles[Inventory.ROLE.CHAMBER]
+    local storage = roles[Inventory.ROLE.STORAGE]
+    if not chamber then return end
+
+    local items = chamber.list()
+    if not items or next(items) == nil then
+        return  -- nothing to clear
+    end
+
+    if storage and storage ~= chamber then
+        print("[Inv] Clearing chamber back to storage.")
+        Inventory.transferAll(chamber, storage)
+    else
+        print("[Inv] Chamber item cleared (no STORAGE to return it to).")
     end
 end
 

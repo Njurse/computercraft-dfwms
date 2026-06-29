@@ -97,8 +97,8 @@ directly adjacent. The script assigns them by slot count:
 | Inventory size | Role      | Purpose                          |
 |----------------|-----------|----------------------------------|
 | Largest        | STORAGE   | Stock of Infused Alloy + Reinforced Alloy |
-| Medium         | MAGAZINE  | Currently loaded shells           |
-| Smallest       | SPENT     | Used shells after firing          |
+| Medium         | MAGAZINE  | Shells loaded for the current round |
+| Smallest/single| CHAMBER   | Single-slot drawer — shows the currently chambered shell |
 
 Fill STORAGE with:
 - `mekanism:infused_alloy`    (Live rounds)

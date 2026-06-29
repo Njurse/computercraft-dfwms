@@ -219,6 +219,15 @@ local function runTurn(state, perifs)
         return true  -- trigger reload
     end
 
+    -- Physically move the popped shell from MAGAZINE to CHAMBER drawer
+    if next(perifs.roles) ~= nil then
+        local shellItem = GS.SHELL_ITEMS[shell]
+        local ok, err = Inv.loadChamber(perifs.roles, shellItem)
+        if not ok then
+            print("[Admin] WARNING: loadChamber failed: " .. tostring(err))
+        end
+    end
+
     -- Aim the drill
     local targetPlayer = (action == "self") and state.current_turn
                          or (state.current_turn == GS.PLAYER.P1 and GS.PLAYER.P2
@@ -252,6 +261,11 @@ local function runTurn(state, perifs)
     }
     Net.send(state.ids.p1, Net.PKT.TURN_RESULT, resultPayload)
     Net.send(state.ids.p2, Net.PKT.TURN_RESULT, resultPayload)
+
+    -- Clear the chamber drawer now that the shot has resolved
+    if next(perifs.roles) ~= nil then
+        Inv.clearChamber(perifs.roles)
+    end
 
     -- Check for game over
     if state.phase == "game_over" then
