@@ -2,8 +2,8 @@
 -- Drives the center (Admin) Advanced Monitor.
 -- All rendering is in this module; game logic is never here.
 
-local UI = require("lib.ui")
-local GS = require("lib.game_state")
+local UI = require("ui")
+local GS = require("game_state")
 
 local CenterDisplay = {}
 

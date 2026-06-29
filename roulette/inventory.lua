@@ -217,11 +217,21 @@ function Inventory.clearMagazine(roles)
     if spent then
         return Inventory.transferAll(magazine, spent)
     else
-        -- No spent bin: just clear (items lost — warn but continue)
-        print("[Inv] WARNING: No SPENT inventory found; clearing magazine items.")
-        local items = magazine.list()
-        for slot, _ in pairs(items) do
-            pcall(function() magazine.pushItems(peripheral.getName(magazine), slot, 64) end)
+        -- No spent bin: try pushing back to STORAGE, or warn if neither exists
+        local storage = roles[Inventory.ROLE.STORAGE]
+        if storage and storage ~= magazine then
+            print("[Inv] WARNING: No SPENT bin; clearing magazine into STORAGE.")
+            local dstName = peripheral.getName(storage)
+            local items = magazine.list()
+            for slot, _ in pairs(items) do
+                pcall(function() magazine.pushItems(dstName, slot, 64) end)
+            end
+        else
+            print("[Inv] WARNING: No SPENT or STORAGE inventory; items will be lost.")
+            local items = magazine.list()
+            for slot, _ in pairs(items) do
+                print("[Inv] Slot " .. slot .. " has leftover items (no target to move to).")
+            end
         end
         return 0
     end

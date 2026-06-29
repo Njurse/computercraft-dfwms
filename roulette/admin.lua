@@ -13,11 +13,11 @@
 -- ============================================================
 
 -- ── Libraries ──────────────────────────────────────────────────────────────
-local Net    = require("lib.network")
-local GS     = require("lib.game_state")
-local Inv    = require("lib.inventory")
-local CD     = require("lib.center_display")
-local UI     = require("lib.ui")
+local Net    = require("network")
+local GS     = require("game_state")
+local Inv    = require("inventory")
+local CD     = require("center_display")
+local UI     = require("ui")
 
 -- ── Debug Configuration ────────────────────────────────────────────────────
 local DEBUG_SINGLE_PLAYER = false  -- true = only one player needed to start
@@ -231,7 +231,7 @@ local function runTurn(state, perifs)
 
     -- Fire the drill
     local isLive = (shell == GS.SHELL.LIVE)
-    fire(state, isLive and nil or nil)  -- motor_ctrl handles RPM constants
+    fire(state, nil)  -- motor_ctrl handles RPM constants
 
     -- Apply game logic
     local result = GS.applyShot(state, action, shell)

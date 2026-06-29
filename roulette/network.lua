@@ -6,7 +6,7 @@
 --   { type = PKT.*, sender = "hostname", recipient = "hostname"|"*", payload = {...} }
 --
 -- Usage:
---   local Net = require("lib.network")
+--   local Net = require("network")
 --   Net.open()                          -- open the wired modem
 --   Net.discover("RouletteAdmin")       -- block until host is found, return id
 --   Net.send("RouletteAdmin", PKT.READY, {player = "Roulette1"})

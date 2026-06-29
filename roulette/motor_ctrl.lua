@@ -14,7 +14,7 @@
 --   Player 2  →  rotate(90,  1)   (right)
 -- ============================================================
 
-local Net = require("lib.network")
+local Net = require("network")
 
 -- ── Motor Speed Constants ──────────────────────────────────────────────────
 local NORMAL_RPM       = 64    -- Standard drill speed for all shots
@@ -25,13 +25,17 @@ local DOUBLE_DAMAGE_RPM = 128  -- Future: double-damage shell type
 --- Find a Create Electric Motor attached to this computer.
 --- Returns the peripheral handle or nil.
 local function findMotor()
-    -- Try peripheral.find first (works if motor is networked via cable)
-    local m = peripheral.find("Create_Motor")
-    if m then
-        print("[MotorCtrl] Found Create Motor via peripheral.find.")
-        return m
+    -- Try peripheral.find with all known CCA type names
+    -- CCA (mrh0): "electric_motor"
+    -- CCA (tom5454, older): "Create_Motor"
+    for _, ptype in ipairs({"electric_motor", "Create_Motor"}) do
+        local m = peripheral.find(ptype)
+        if m then
+            print("[MotorCtrl] Found Electric Motor (type: " .. ptype .. ").")
+            return m
+        end
     end
-    -- Scan sides
+    -- Scan sides for anything with "motor" in its type
     for _, side in ipairs({"top","bottom","left","right","front","back"}) do
         local t = peripheral.getType(side)
         if t and string.find(string.lower(t), "motor") then
@@ -39,27 +43,36 @@ local function findMotor()
             return peripheral.wrap(side)
         end
     end
-    print("[MotorCtrl] WARNING: No Create Electric Motor found.")
+    print("[MotorCtrl] WARNING: No Electric Motor found.")
     return nil
 end
 
 --- Find a Create Sequential Gearbox attached to this computer.
 --- Returns the peripheral handle or nil.
 local function findGearbox()
-    local g = peripheral.find("Create_SequentialGearbox")
-    if g then
-        print("[MotorCtrl] Found Sequential Gearbox via peripheral.find.")
-        return g
+    -- Try known type names from CCA and base Create
+    -- CCA (older by tom5454): "Create_SequentialGearbox"
+    -- CCA (newer by mrh0):    no gearbox block; use Digital Adapter instead
+    -- Base Create:             "sequenced_gearshift"
+    for _, ptype in ipairs({"Create_SequentialGearbox", "sequenced_gearshift"}) do
+        local g = peripheral.find(ptype)
+        if g then
+            print("[MotorCtrl] Found gearbox/gearshift (type: " .. ptype .. ").")
+            return g
+        end
     end
+    -- Scan sides for anything gearbox- or gearshift-like
     for _, side in ipairs({"top","bottom","left","right","front","back"}) do
         local t = peripheral.getType(side)
         if t and (string.find(string.lower(t), "gearbox") or
-                  string.find(string.lower(t), "sequential")) then
-            print("[MotorCtrl] Found gearbox on side: " .. side)
+                  string.find(string.lower(t), "gear") or
+                  string.find(string.lower(t), "sequential") or
+                  string.find(string.lower(t), "gearshift")) then
+            print("[MotorCtrl] Found gearbox on side: " .. side .. " (type: " .. t .. ")")
             return peripheral.wrap(side)
         end
     end
-    print("[MotorCtrl] WARNING: No Sequential Gearbox found.")
+    print("[MotorCtrl] WARNING: No gearbox/gearshift found.")
     return nil
 end
 

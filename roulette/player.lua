@@ -11,9 +11,9 @@
 --   • Show shot results and health updates on the local monitor
 -- ============================================================
 
-local Net = require("lib.network")
-local GS  = require("lib.game_state")
-local UI  = require("lib.ui")
+local Net = require("network")
+local GS  = require("game_state")
+local UI  = require("ui")
 
 -- ── Constants ──────────────────────────────────────────────────────────────
 local HOST_ADMIN = "RouletteAdmin"
