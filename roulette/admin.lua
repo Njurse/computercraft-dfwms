@@ -27,24 +27,121 @@ local HOST_P1    = "Roulette1"
 local HOST_P2    = "Roulette2"
 local HOST_MOTOR = "RouletteMotorCtrl"
 
--- ── Motor Control Helpers ──────────────────────────────────────────────────
--- These send commands to RouletteMotorCtrl over Rednet.
+-- ── Mechanical Sequence ──────────────────────────────────────────────────
+-- These send commands to RouletteMotorCtrl over Rednet in a 5-step sequence:
+--   LIFT → AIM → (ATTACK if live) → RETURN → RETRACT
 
-local function aimAt(state, target)
-    Net.send(state.ids.motorCtrl, Net.PKT.AIM, { target = target })
-    -- Wait for acknowledgement (with timeout)
-    local pkt = Net.receive(Net.PKT.MOTOR_DONE, 5)
+--- Step 1: Tell motor controller to raise the mechanism.
+--- Then poll the admin computer's bottom side until the gearbox appears.
+---@param state table
+local function liftMechanism(state)
+    print("[Admin] LIFT: Raising mechanism...")
+    Net.send(state.ids.motorCtrl, Net.PKT.LIFT, {})
+
+    -- Wait for LIFT_DONE (motor controller acknowledges it started the lift)
+    local pkt = Net.receive(Net.PKT.LIFT_DONE, 10)
     if not pkt then
-        print("[Admin] WARNING: Motor controller did not acknowledge AIM in time.")
+        print("[Admin] WARNING: Motor controller did not acknowledge LIFT.")
+        return
+    end
+
+    -- Now poll bottom side until the gearbox peripheral appears
+    print("[Admin] Waiting for mechanism to reach admin computer...")
+    local timeout = os.clock() + 15  -- max 15 seconds
+    local gearboxFound = false
+    while os.clock() < timeout do
+        local t = peripheral.getType("bottom")
+        if t then
+            local lower = string.lower(t)
+            if string.find(lower, "gearbox") or
+               string.find(lower, "gear") or
+               string.find(lower, "sequenti") or
+               string.find(lower, "gearshift") then
+                gearboxFound = true
+                print("[Admin] Gearbox detected on bottom side! (" .. t .. ")")
+                break
+            end
+        end
+        sleep(0.1)  -- poll every tick
+    end
+
+    if not gearboxFound then
+        print("[Admin] WARNING: Gearbox never appeared on bottom side. Proceeding anyway.")
     end
 end
 
-local function fire(state, rpm)
-    Net.send(state.ids.motorCtrl, Net.PKT.FIRE, { rpm = rpm or 0 })
-    local pkt = Net.receive(Net.PKT.MOTOR_DONE, 8)
+--- Step 2: Aim gearbox #2 at the target player.
+---@param state table
+---@param target string  "p1" or "p2"
+local function aimAtPlayer(state, target)
+    print("[Admin] AIM: Rotating toward " .. target)
+    Net.send(state.ids.motorCtrl, Net.PKT.AIM, { target = target })
+    local pkt = Net.receive(Net.PKT.AIM_DONE, 10)
     if not pkt then
-        print("[Admin] WARNING: Motor controller did not acknowledge FIRE in time.")
+        print("[Admin] WARNING: Motor controller did not acknowledge AIM.")
     end
+end
+
+--- Step 3: Attack — fire the drill (only for live shells).
+---@param state table
+local function attackDrill(state)
+    print("[Admin] ATTACK: Firing drill...")
+    Net.send(state.ids.motorCtrl, Net.PKT.ATTACK, {})
+    local pkt = Net.receive(Net.PKT.ATTACK_DONE, 10)
+    if not pkt then
+        print("[Admin] WARNING: Motor controller did not acknowledge ATTACK.")
+    end
+end
+
+--- Step 4: Return gearbox #2 to neutral position.
+---@param state table
+local function returnGearbox(state)
+    print("[Admin] RETURN: Returning gearbox to neutral...")
+    Net.send(state.ids.motorCtrl, Net.PKT.RETURN, {})
+    local pkt = Net.receive(Net.PKT.RETURN_DONE, 10)
+    if not pkt then
+        print("[Admin] WARNING: Motor controller did not acknowledge RETURN.")
+    end
+end
+
+--- Step 5: Retract the mechanism.
+---@param state table
+local function retractMechanism(state)
+    print("[Admin] RETRACT: Lowering mechanism...")
+    Net.send(state.ids.motorCtrl, Net.PKT.RETRACT, {})
+    local pkt = Net.receive(Net.PKT.RETRACT_DONE, 10)
+    if not pkt then
+        print("[Admin] WARNING: Motor controller did not acknowledge RETRACT.")
+    end
+end
+
+--- Run the full 5-step mechanical sequence for a shot.
+---@param state   table
+---@param shell   string  GS.SHELL.*
+local function runMechanicalSequence(state, shell)
+    local isLive = (shell == GS.SHELL.LIVE)
+
+    -- 1. LIFT — raise the mechanism
+    liftMechanism(state)
+
+    -- 2. AIM — rotate gearbox #2 toward the target
+    -- (target was already determined by the player's action)
+    -- We stored it in state.current_target before calling this
+    aimAtPlayer(state, state.current_target)
+
+    -- 3. ATTACK — fire drill (LIVE only) or pause for BLANK
+    if isLive then
+        attackDrill(state)
+    else
+        print("[Admin] Blank round — skipping attack phase.")
+        sleep(1.5)  -- brief dramatic pause instead
+    end
+
+    -- 4. RETURN — gearbox #2 back to neutral
+    returnGearbox(state)
+
+    -- 5. RETRACT — lower the mechanism
+    retractMechanism(state)
 end
 
 -- ── Networking Broadcast Helpers ───────────────────────────────────────────
@@ -228,21 +325,17 @@ local function runTurn(state, perifs)
         end
     end
 
-    -- Aim the drill
+    -- Determine target player from action
     local targetPlayer = (action == "self") and state.current_turn
                          or (state.current_turn == GS.PLAYER.P1 and GS.PLAYER.P2
                                                                   or GS.PLAYER.P1)
-    aimAt(state, targetPlayer)
+    state.current_target = targetPlayer  -- stored for the mechanical sequence
 
-    -- Show "firing" message
-    CD.showMessage(mon, "FIRING...", UI.COLOR.WARNING)
-    sleep(0.5)
+    -- Run the full mechanical sequence: LIFT → AIM → ATTACK/RETURN → RETRACT
+    CD.showMessage(mon, "MECHANISM ENGAGED...", UI.COLOR.WARNING)
+    runMechanicalSequence(state, shell)
 
-    -- Fire the drill
-    local isLive = (shell == GS.SHELL.LIVE)
-    fire(state, nil)  -- motor_ctrl handles RPM constants
-
-    -- Apply game logic
+    -- Apply game logic (damage, turn passing, etc.)
     local result = GS.applyShot(state, action, shell)
     broadcastHealth(state)
 

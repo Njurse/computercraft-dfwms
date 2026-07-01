@@ -233,7 +233,7 @@ All messages are serialized Lua tables on the `"roulette"` Rednet protocol.
        -- ...
    ```
 
-5. In `admin.lua`, pass `DOUBLE_DAMAGE_RPM` to `fire()` when this shell is active.
+5. In `admin.lua`, add a check in `runMechanicalSequence()` to pass a higher RPM to `attackDrill()` when this shell is active.
 
 ---
 

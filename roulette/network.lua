@@ -30,10 +30,21 @@ Net.PKT = {
     TURN_RESULT   = "TURN_RESULT",     -- payload: { shell, damage, next_turn, health }
     WAITING       = "WAITING",
 
-    -- Motor control
+    -- Motor control (expanded)
     AIM           = "AIM",            -- payload: { target = "p1"|"p2" }
     FIRE          = "FIRE",           -- payload: { rpm = number }
     MOTOR_DONE    = "MOTOR_DONE",
+
+    -- Multi-step mechanical sequence
+    LIFT          = "LIFT",           -- payload: {}  — raise mechanism
+    LIFT_DONE     = "LIFT_DONE",      -- payload: {}
+    AIM_DONE      = "AIM_DONE",       -- payload: { target = "p1"|"p2" }
+    ATTACK        = "ATTACK",         -- payload: {}  — fire drill (live only)
+    ATTACK_DONE   = "ATTACK_DONE",    -- payload: {}
+    RETURN        = "RETURN",         -- payload: {}  — gearbox #2 back to neutral
+    RETURN_DONE   = "RETURN_DONE",    -- payload: {}
+    RETRACT       = "RETRACT",        -- payload: {}  — lower mechanism
+    RETRACT_DONE  = "RETRACT_DONE",   -- payload: {}
 
     -- Inventory / magazine
     LOAD_MAGAZINE = "LOAD_MAGAZINE",  -- payload: { shells = [...] }
